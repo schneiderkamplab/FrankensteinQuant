@@ -1,4 +1,4 @@
-import torch.functional as F
+import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
 
@@ -7,9 +7,12 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost):
     total_loss, total_acc = 0, 0
     for x, y in tqdm(loader, desc="Training"):
         x, y = x.to(device), y.to(device)
-        logits, cost = model(x) #, tau, collect_costs=True)
-        logits = logits[0] if isinstance(logits, tuple) else logits
+        logits = model(x) #, tau, collect_costs=True)
         task_loss = F.cross_entropy(logits, y)
+        cost = 0.0
+        for module in model.modules():
+            if hasattr(module, 'get_cost'):
+                cost += module.get_cost()
         loss = task_loss + lambda_cost * cost
         wandb.log({
             "train/task_loss": task_loss.item(),

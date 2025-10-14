@@ -22,9 +22,8 @@ COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost
 
 
 class SmallNet(nn.Module):
-    def __init__(self, lr=0.001, wd=0.0, num_classes=100, use_quant=True):
+    def __init__(self, lr=0.001, wd=0.0, num_classes=100):
         super().__init__()
-        self.use_qaunt = use_quant
         self.lr = lr
         self.wd = wd
         self.flatten = nn.Flatten()
@@ -39,28 +38,25 @@ class SmallNet(nn.Module):
     def forward(self, x, tau=1.0, collect_costs=False):
         total_cost = 0.0
 
-        x, cost = self.conv1(x, tau, collect_costs)
+        x = self.conv1(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
-        total_cost += sum(cost.values()) if collect_costs else 0
 
-        x, cost = self.conv2(x, tau, collect_costs)
+        x = self.conv2(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
-        total_cost += sum(cost.values()) if collect_costs else 0
 
-        x, cost = self.conv3(x, tau, collect_costs)
+        x = self.conv3(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
-        total_cost += sum(cost.values()) if collect_costs else 0
 
         # MLP
         x = self.flatten(x)
-        x, cost = self.fc1(x, tau, collect_costs)
+        x = self.fc1(x)
         x = F.relu(x)
-        logits = self.fc2(x, tau, collect_costs)
+        logits = self.fc2(x)
 
-        return logits, total_cost 
+        return logits 
 
 def main(
     epochs: int = 10,
@@ -70,7 +66,7 @@ def main(
     lambda_cost: float = 0.001,
     tau_start: float = 5.0,
     tau_end: float = 0.5,
-    use_quant: bool = True,
+    use_quant: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     transform = T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])
@@ -86,7 +82,8 @@ def main(
         "cost_table": COST_TABLE,
         "use_quant": use_quant,
     })
-    model = SmallNet(use_quant=use_quant).to(device)
+    model = SmallNet().to(device)
+
     if use_quant:
         model = frankensteinize(model)
     print("Model Summary:")

@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from CostMixin import CostMixin
 from gumbel_bit_quantizer import GumbelBitQuantizer
 
-class LinearFQ(nn.Module):
+class LinearFQ(nn.Module, CostMixin):
     def __init__(
         self,
         in_features,
@@ -33,13 +33,10 @@ class LinearFQ(nn.Module):
         wq, c2, _ = self.w_q(self.linear.weight, tau, return_cost=collect_costs)
         out = F.linear(xq, wq, self.linear.bias)
         # rescale?
-        if self.a_q.chosen_bit is not None:
-            scale = 2 ** (self.a_q.chosen_bit - 1)
-            out = out / scale
-
-        costs = {}
-        if collect_costs:
-            costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
+        self.costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
     
-        return out, costs
+        return out
     
+    def get_cost(self):
+        total_cost = sum(self.cost.values()) 
+        return total_cost

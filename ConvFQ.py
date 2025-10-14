@@ -2,10 +2,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from CostMixin import CostMixin
 from gumbel_bit_quantizer import GumbelBitQuantizer
 
-class ConvFQ(nn.Module):
+class ConvFQ(nn.Module, CostMixin):
     def __init__(
         self,
         in_ch, 
@@ -25,8 +25,14 @@ class ConvFQ(nn.Module):
         wq, c2, _ = self.w_q(self.conv.weight, tau, return_cost=collect_costs) # weights
         out = F.conv2d(xq, wq, self.conv.bias, stride=self.conv.stride,
                     padding=self.conv.padding)
-        costs = {}
-        if collect_costs:
-            costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
-        return out, costs
-    
+        # rescale?        
+        self.costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
+
+        return out
+
+    def __repr__(self):
+        return f"ConvFQ(in_ch={self.conv.in_channels}, out_ch={self.conv.out_channels}, kernel_size={self.conv.kernel_size}, stride={self.conv.stride}, padding={self.conv.padding})"
+
+    def get_cost(self):
+        total_cost = sum(self.costs.values()) 
+        return total_cost

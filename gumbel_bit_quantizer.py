@@ -36,7 +36,7 @@ class GumbelBitQuantizer(nn.Module):
         bit = self.bit_choices[idx]
         wandb.log({f"{self.name}_bit_choice": bit})
         xq = self._quantize(x, bit)
-
+    
         costs = {}
         if return_cost:
             expected_cost = sum(
