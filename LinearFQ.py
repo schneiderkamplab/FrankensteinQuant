@@ -32,8 +32,12 @@ class LinearFQ(nn.Module):
         xq, c1, _ = self.a_q(x, tau, return_cost=collect_costs)
         wq, c2, _ = self.w_q(self.linear.weight, tau, return_cost=collect_costs)
         out = F.linear(xq, wq, self.linear.bias)
+        # rescale?
+        if self.a_q.chosen_bit is not None:
+            scale = 2 ** (self.a_q.chosen_bit - 1)
+            out = out / scale
+
         costs = {}
-    
         if collect_costs:
             costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
     
