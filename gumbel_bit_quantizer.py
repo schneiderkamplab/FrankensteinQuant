@@ -14,7 +14,6 @@ class GumbelBitQuantizer(nn.Module):
         self.cost_table = cost_table
         self.chosen_bit = None  # will be filled after training
 
-
     def _quantize(self, x, bit):
         qmin, qmax = -(2 ** (bit - 1)), (2 ** (bit - 1)) - 1
         scale = x.detach().abs().max() / qmax
