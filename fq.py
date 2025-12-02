@@ -10,6 +10,7 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
             kwargs = dict(new_class_kwargs)
 
             if old_class == nn.Linear:
+                print("Replacing Linear with LinearFQ:", qual_name)
                 kwargs["in_features"] = module.in_features
                 kwargs["out_features"] = module.out_features
                 bias = getattr(module, "bias", None) is not None
@@ -17,6 +18,7 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
                 kwargs["device"] = module.weight.device
                 new_module = new_class(**kwargs)
             elif old_class == nn.Conv2d:
+                print("Replacing Conv2d with ConvFQ:", qual_name)
                 kwargs["in_ch"] = module.in_channels
                 kwargs["out_ch"] = module.out_channels
                 kwargs["kernel_size"] = module.kernel_size
@@ -35,6 +37,6 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
         else:
             replace_modules(module, old_class, new_class, new_class_kwargs, match_name, prefix=qual_name)
 
-def frankensteinize(model):
-    replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kwargs={"name": "fc"}, match_name="fc|cnn|linear", prefix="")
+def frankensteinize(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kwargs={}):
+    replace_modules(model, old_class=old_class, new_class=new_class, new_class_kwargs=new_class_kwargs, match_name="conv|fc|cnn|linear", prefix="")
     return model

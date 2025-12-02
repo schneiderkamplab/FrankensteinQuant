@@ -14,13 +14,14 @@ class ConvFQ(nn.Module, CostMixin):
         stride=1, 
         padding=0, 
         name="conv",
+        **kwargs
     ):
         super().__init__()
         self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=kernel_size, stride=stride, padding=padding)
-        self.w_q = GumbelBitQuantizer(name=f"{name}_w")
-        self.a_q = GumbelBitQuantizer(name=f"{name}_a")
+        self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
+        self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
 
-    def forward(self, x, tau=1.0, collect_costs=False):
+    def forward(self, x, tau=1.0, collect_costs=True):
         xq, c1, _ = self.a_q(x, tau, return_cost=collect_costs) # activation 
         wq, c2, _ = self.w_q(self.conv.weight, tau, return_cost=collect_costs) # weights
         out = F.conv2d(xq, wq, self.conv.bias, stride=self.conv.stride,

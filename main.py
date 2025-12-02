@@ -7,8 +7,8 @@ import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
 from engine import train_epoch
+from ConvFQ import ConvFQ
 from fq import frankensteinize
-
 import ssl
 
 from gumbel_bit_quantizer import GumbelBitQuantizer
@@ -17,7 +17,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 # -----------------------
 # Candidate bitwidths & cost table
 # -----------------------
-BIT_CHOICES = [2, 4, 8, 16]
+BIT_CHOICES = [16] # [4, 8] #[2, 4, 8, 16]
 COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost
 
 
@@ -66,34 +66,48 @@ def main(
     lambda_cost: float = 0.001,
     tau_start: float = 5.0,
     tau_end: float = 0.5,
-    use_quant: bool = False,
+    use_quant: bool = True,
+    log: bool = False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     transform = T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])
     trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
-    wandb.init(project="frankenstein-quant", name="smallnet-cifar100")
-    wandb.config.update({
-        "epochs": 10,
-        "lr": 1e-3,
-        "weight_decay": 0.0,
-        "bit_choices": BIT_CHOICES,
-        "cost_table": COST_TABLE,
-        "use_quant": use_quant,
-    })
+    if log:
+        wandb.init(project="frankenstein-quant", name="smallnet-cifar100")
+        wandb.config.update({
+            "epochs": 10,
+            "lr": 1e-3,
+            "weight_decay": 0.0,
+            "bit_choices": BIT_CHOICES,
+            "cost_table": COST_TABLE,
+            "use_quant": use_quant,
+        })
     model = SmallNet().to(device)
-
+        
     if use_quant:
-        model = frankensteinize(model)
+        model = frankensteinize(model, new_class_kwargs={
+            "name": "fc",
+            "bit_choices": BIT_CHOICES,
+            "cost_table": COST_TABLE
+        })
+        # model = frankensteinize(model, old_class=nn.Conv2d, new_class=ConvFQ, new_class_kwargs={
+        #     "name": "conv2d",
+        #     "bit_choices": BIT_CHOICES,
+        #     "cost_table": COST_TABLE
+        # })
+
     print("Model Summary:")
     print(model)
-    
+    model.to(device)
+
+    # Note always to layer replacements BEFORE optimizer creation 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     for epoch in range(epochs):
         tau = tau_start * (tau_end / tau_start) ** (epoch / (epochs - 1))
-        loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost)
+        loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log)
         print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, tau={tau:.2f}")
 
     # Finalize bitwidth choices
