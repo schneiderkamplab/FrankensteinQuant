@@ -19,8 +19,8 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
                 new_module = new_class(**kwargs)
             elif old_class == nn.Conv2d:
                 print("Replacing Conv2d with ConvFQ:", qual_name)
-                kwargs["in_ch"] = module.in_channels
-                kwargs["out_ch"] = module.out_channels
+                kwargs["in_channels"] = module.in_channels
+                kwargs["out_channels"] = module.out_channels
                 kwargs["kernel_size"] = module.kernel_size
                 kwargs["stride"] = module.stride
                 kwargs["padding"] = module.padding
