@@ -17,7 +17,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 # -----------------------
 # Candidate bitwidths & cost table
 # -----------------------
-BIT_CHOICES = [16] # [4, 8] #[2, 4, 8, 16]
+BIT_CHOICES = [2, 4, 8, 16]
 COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost
 
 
@@ -85,7 +85,7 @@ def main(
             "use_quant": use_quant,
         })
     model = SmallNet().to(device)
-        
+
     if use_quant:
         model = frankensteinize(model, new_class_kwargs={
             "name": "fc",

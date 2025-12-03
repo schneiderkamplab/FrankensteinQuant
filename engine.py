@@ -10,7 +10,7 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
 
     for x, y in tqdm(loader, desc="Training"):
         x, y = x.to(device), y.to(device)
-        logits = model(x) #, tau, collect_costs=True)
+        logits = model(x) 
         task_loss = F.cross_entropy(logits, y)
         print("task_loss:", task_loss.item())
         cost = 0.0
@@ -18,7 +18,7 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
         for module in model.modules():
             if hasattr(module, 'get_cost'):
                 cost += module.get_cost()
-        loss = task_loss # + lambda_cost * cost
+        loss = task_loss + lambda_cost * cost
         
         if log:
             wandb.log({

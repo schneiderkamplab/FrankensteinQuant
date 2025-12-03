@@ -46,15 +46,7 @@ class GumbelBitQuantizer(nn.Module):
     
     def forward(self, x, tau=1.0, return_cost=False):
         probs = self.gumbel_softmax(self.alpha, tau=tau, hard=False)
-        # print("probs:", probs)
         bit_soft = torch.sum(probs * torch.tensor(self.bit_choices, device=probs.device))
-        # print("bit_soft:", bit_soft)
-
-        # idx = probs.argmax()
-        # print("idx:", idx)
-        # bit = self.bit_choices[idx]
-        # self.chosen_bit = bit
-        # wandb.log({f"{self.name}_bit_choice": bit})
         xq, scale = self._quantize(x, bit_soft)
 
         costs = {}
@@ -66,7 +58,6 @@ class GumbelBitQuantizer(nn.Module):
             )
             costs = {"expected_cost": expected_cost}
 
-        # print(f"xq: {xq}, costs: {costs}, probs: {probs}, scale: {scale}")
         return xq, costs, probs, scale
 
     def finalize_choice(self):
