@@ -20,7 +20,7 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
                 cost += module.get_cost()
         loss = task_loss + lambda_cost * cost
         
-        pbar.set_postfix({"loss": loss.item(), "entropy": task_loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
+        pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
         if log:
             wandb.log({
                 "train/task_loss": task_loss.item(),
@@ -28,12 +28,16 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
                 "train/cost": cost, "train/tau": tau
                 })
         loss.backward()
+        # with torch.no_grad():
+        #     for name, module in model.named_modules():
+        #         # if isinstance(module, LinearFQ):
+        #         if hasattr(module, 'weight'):
+        #             if module.weight.grad is not None:
+        #                 print(f"{name} grad norm: {module.weight.grad.norm():.6f}")
         optimizer.step()
         optimizer.zero_grad()
-        pbar.update(1)
-
-        total_loss += loss.item() * x.size(0)
-        total_acc += (logits.argmax(1) == y).sum().item()
+    
+    pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
 
 def evaluate(model, loader, device, log=False):
@@ -50,8 +54,8 @@ def evaluate(model, loader, device, log=False):
                 wandb.log({
                     "eval/loss": loss.item(),
                 })
+            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
             total_loss += loss.item() * x.size(0)
             total_acc += (logits.argmax(1) == y).sum().item()
-            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
-            pbar.update(1)
+        pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
