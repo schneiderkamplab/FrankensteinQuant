@@ -86,7 +86,7 @@ def main(
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1)
 
     if log:
-        wandb.init(project="frankenstein-quant", name="smallnet-cifar100")
+        wandb.init(project="frankenstein-quant", name="SmallNet_CIFAR100"+(f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec"))
     model = SmallNet().to(device)
 
     if use_quant:
