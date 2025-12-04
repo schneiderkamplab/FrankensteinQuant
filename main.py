@@ -115,7 +115,6 @@ def main(
             "use_quant": use_quant,
             "model": str(model)
         })
-
     # Note always to layer replacements BEFORE optimizer creation 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -123,6 +122,15 @@ def main(
         tau = tau_start * (tau_end / tau_start) ** (epoch / (epochs - 1))
         loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log)
         test_loss, test_acc = evaluate(model, testloader, device, log)
+        if log:
+            wandb.log({
+                "epoch": epoch,
+                "train/loss": loss,
+                "train/acc": acc,
+                "test/loss": test_loss,
+                "test/acc": test_acc,
+                "tau": tau
+            })
         print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}, tau={tau:.2f}")
 
     # Finalize bitwidth choices
