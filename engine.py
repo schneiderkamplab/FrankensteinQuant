@@ -40,7 +40,7 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
     pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
 
-def evaluate(model, loader, device, log=False):
+def evaluate(model, loader, device, log):
     model.eval()
     total_loss, total_acc = 0, 0
 
@@ -50,12 +50,15 @@ def evaluate(model, loader, device, log=False):
             x, y = x.to(device), y.to(device)
             logits = model(x)
             loss = F.cross_entropy(logits, y)
+            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
+            loss = loss.item() * x.size(0)
+            acc = (logits.argmax(1) == y).sum().item()
+            total_loss += loss
+            total_acc += acc
             if log:
                 wandb.log({
-                    "eval/loss": loss.item(),
+                    "eval/loss": loss,
+                    "eval/acc": acc
                 })
-            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
-            total_loss += loss.item() * x.size(0)
-            total_acc += (logits.argmax(1) == y).sum().item()
         pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
