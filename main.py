@@ -1,20 +1,20 @@
-import torch
-import wandb
+import ssl
 import typer
-from typing import List
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
-from engine import train_epoch, evaluate
+import wandb
+
 from ConvFQ import ConvFQ
+from engine import train_epoch, evaluate
 from fq import frankensteinize
-import ssl
-
 from gumbel_bit_quantizer import GumbelBitQuantizer
-ssl._create_default_https_context = ssl._create_unverified_context
+from transformers import ViTForImageClassification, ViTConfig
 
+ssl._create_default_https_context = ssl._create_unverified_context
 app = typer.Typer()
 
 BIT_CHOICES = [2, 4, 8, 16]
@@ -32,7 +32,6 @@ class SmallNet(nn.Module):
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.fc1 = nn.Linear(128 * 4 * 4, 512)
         self.fc2 = nn.Linear(512, num_classes)
-        
 
     def forward(self, x, tau=1.0, collect_costs=False):
         total_cost = 0.0
@@ -55,7 +54,27 @@ class SmallNet(nn.Module):
         x = F.relu(x)
         logits = self.fc2(x)
 
-        return logits 
+        return logits
+
+
+class ViTWrapper(nn.Module):
+    def __init__(self, num_classes=100, image_size=32, patch_size=4, hidden_size=192, num_layers=6, num_heads=3):
+        super().__init__()
+        config = ViTConfig(
+            image_size=image_size,
+            patch_size=patch_size,
+            num_channels=3,
+            hidden_size=hidden_size,
+            num_hidden_layers=num_layers,
+            num_attention_heads=num_heads,
+            intermediate_size=hidden_size * 4,
+            num_labels=num_classes,
+        )
+        self.vit = ViTForImageClassification(config)
+    
+    def forward(self, x, tau=1.0, collect_costs=False):
+        outputs = self.vit(x)
+        return outputs.logits 
 
 
 @app.command()
@@ -70,12 +89,13 @@ def main(
     use_quant: bool = False,
     bit_choices: str = None,
     log: bool = False,
+    model_type: str = "vit",  # "smallnet" or "vit"
 ):
     if use_quant:
         if bit_choices is not None:     
             bit_choices = eval(bit_choices)
         else:
-            typer.echo("Using default bit choices:", BIT_CHOICES)
+            # typer.echo("Using default bit choices:", BIT_CHOICES)
             bit_choices = BIT_CHOICES
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -86,10 +106,17 @@ def main(
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1)
 
     if log:
-        wandb.init(project="frankenstein-quant", name="SmallNet_CIFAR100"+(f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec"))
-    model = SmallNet().to(device)
+        run_name = f"{model_type.upper()}_CIFAR100" + (f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec")
+        wandb.init(project="frankenstein-quant", name=run_name)
+    
+    # Select model
+    if model_type.lower() == "vit":
+        model = ViTWrapper(num_classes=100).to(device)
+    else:
+        model = SmallNet().to(device)
 
     if use_quant:
+        typer.echo("Applying Frankenstein Quantization...")
         model = frankensteinize(model, new_class_kwargs={
             "name": "fc",
             "bit_choices": bit_choices,
