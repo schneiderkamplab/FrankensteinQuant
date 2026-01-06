@@ -55,11 +55,15 @@ def main(
         run_name = f"{model_type.upper()}_CIFAR100" + (f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec")
         wandb.init(project="frankenstein-quant", name=run_name)
     
-    # Select model
-    if model_type.lower() == "vit":
-        model = ViTWrapper(num_classes=100).to(device)
-    else:
-        model = SmallNet().to(device)
+    match model_type.lower():
+        case "vit":
+            typer.echo("Using ViT model")
+            model = ViTWrapper(num_classes=100).to(device)
+        case "smallnet":
+            typer.echo("Using SmallNet model")
+            model = SmallNet().to(device)
+        case _:
+            raise ValueError(f"Unknown model type: {model_type}")
 
     if use_quant:
         typer.echo("Applying Frankenstein Quantization...")
