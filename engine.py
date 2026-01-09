@@ -4,15 +4,19 @@ from tqdm import tqdm
 import wandb
 from LinearFQ import LinearFQ
 
-def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log):
+def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_id):
     model.train()
     total_loss, total_acc = 0, 0
 
     pbar = tqdm(loader, desc="Training")
-    for x, y in pbar:
-        x, y = x.to(device), y.to(device)
-        logits = model(x) 
-        task_loss = F.cross_entropy(logits, y)
+    for batch in pbar: 
+        if "t5" in model_id:
+            loss = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["loss"]
+        else:
+            x, y = batch
+            x, y = x.to(device), y.to(device)
+            logits = model(x) 
+            task_loss = F.cross_entropy(logits, y)
         cost = 0.0
     
         for module in model.modules():

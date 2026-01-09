@@ -5,7 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as T
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+from transformers import T5Config, T5ForConditionalGeneration, T5Tokenizer
+from datasets import load_dataset
 import wandb
 
 from ConvFQ import ConvFQ
@@ -22,6 +24,22 @@ app = typer.Typer()
 BIT_CHOICES = [2, 4, 8, 16]
 COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost
 
+class OpusBooks(Dataset):
+    
+    def __init__(self, tokenizer, debug, dataset, num_debug_samples):
+        self.dataset, self.tokenizer = dataset.select(list(range(0, num_debug_samples))) if debug else dataset, tokenizer
+
+    def __len__(self):
+        return self.dataset.shape[0]
+
+    def __getitem__(self, index):
+        source = self.dataset[index]['translation']['en']
+        target = self.dataset[index]['translation']['fr']
+        source = self.tokenizer.batch_encode_plus([source], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
+        targets = self.tokenizer.batch_encode_plus([target], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
+        
+
+        return {"source_ids": source['input_ids'].squeeze(), "source_mask": source['attention_mask'].squeeze(), "target_ids": targets['input_ids'].squeeze(), "target_mask": targets['attention_mask'].squeeze()}
 
 @app.command()
 def main(
@@ -35,19 +53,28 @@ def main(
     use_quant: bool = False,
     bit_choices: str = None,
     log: bool = False,
-    model_type: str = "vit",  # "smallnet" or "vit"
+    model_type: str = "vit",
+    debug: bool = False, # reduce number of sampels for debugging
 ):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     if use_quant:
         if bit_choices is not None:     
             bit_choices = eval(bit_choices)
         else:
-            # typer.echo("Using default bit choices:", BIT_CHOICES)
             bit_choices = BIT_CHOICES
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    transform = T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])
-    trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
-    testset = torchvision.datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
+    if model_type.lower() in ["t5"]:
+        model_id = 't5-small'
+        tokenizer =  T5Tokenizer.from_pretrained(model_id, legacy=False)
+        train_test_split = load_dataset("Helsinki-NLP/opus_books", "en-fr", split="train").train_test_split(test_size=0.2) # Fetch from Huggingface
+        trainset = OpusBooks(tokenizer, debug, train_test_split['train'], num_debug_samples=15000)
+        testset = OpusBooks(tokenizer, debug, train_test_split['test'], num_debug_samples=3000)
+    else:            
+        transform = T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])
+        trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
+        testset = torchvision.datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
+    
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=1)
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1)
 
@@ -62,6 +89,9 @@ def main(
         case "smallnet":
             typer.echo("Using SmallNet model")
             model = SmallNet().to(device)
+        case "t5":
+            typer.echo("Using T5 model")
+            model = T5ForConditionalGeneration(T5Config.from_pretrained(model_id)).to(device)
         case _:
             raise ValueError(f"Unknown model type: {model_type}")
 
@@ -97,7 +127,7 @@ def main(
 
     for epoch in range(epochs):
         tau = tau_start * (tau_end / tau_start) ** (epoch / (epochs - 1))
-        loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log)
+        loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log, model_id)
         test_loss, test_acc = evaluate(model, testloader, device, log)
         if log:
             wandb.log({
@@ -109,7 +139,6 @@ def main(
             })
         print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}, tau={tau:.2f}")
 
-    # Finalize bitwidth choices
     if use_quant:
         # iterate through all modules write chosen bit from GumbelBitQuantizer to each layer
         print("\n=== Final Layer Bitwidths ===")
