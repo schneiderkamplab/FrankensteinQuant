@@ -11,7 +11,8 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
     pbar = tqdm(loader, desc="Training")
     for batch in pbar: 
         if "t5" in model_id:
-            loss = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["loss"]
+            batch = {k: v.to(device) for k, v in batch.items()}
+            task_loss = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["loss"]
         else:
             x, y = batch
             x, y = x.to(device), y.to(device)
@@ -24,7 +25,11 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
                 cost += module.get_cost()
         loss = task_loss + lambda_cost * cost
         
-        pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
+        if "t5" in model_id:
+            pbar.set_postfix({"loss": loss.item()})
+        else:
+            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
+        
         if log:
             wandb.log({
                 "train/task_loss": task_loss.item(),
