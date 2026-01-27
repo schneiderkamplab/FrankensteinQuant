@@ -98,7 +98,8 @@ def main(
     if use_quant:
         typer.echo("Applying Frankenstein Quantization...")
         model = frankensteinize(model, new_class_kwargs={
-            "name": "fc",
+            # "name": "fc",
+            "name": "T5Attention",
             "bit_choices": bit_choices,
             "cost_table": COST_TABLE
         })
@@ -125,10 +126,11 @@ def main(
     # Note always to layer replacements BEFORE optimizer creation 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    for epoch in range(epochs):
+    epochs = epochs + 1 # offset by one for tau calculation
+    for epoch in range(1, epochs):
         tau = tau_start * (tau_end / tau_start) ** (epoch / (epochs - 1))
         loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log, model_id)
-        test_loss, test_acc = evaluate(model, testloader, device, log)
+        test_loss, test_acc = evaluate(model, testloader, device, log, model_id)
         if log:
             wandb.log({
                 "train/loss": loss,

@@ -49,25 +49,38 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
     pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
 
-def evaluate(model, loader, device, log):
+def evaluate(model, loader, device, log, model_id):
     model.eval()
     total_loss, total_acc = 0, 0
 
     with torch.no_grad():
         pbar = tqdm(loader, desc="Evaluating")
-        for x, y in pbar:
-            x, y = x.to(device), y.to(device)
-            logits = model(x)
-            loss = F.cross_entropy(logits, y)
-            pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
-            loss = loss.item() * x.size(0)
-            acc = (logits.argmax(1) == y).sum().item()
-            total_loss += loss
-            total_acc += acc
-            if log:
+
+        for batch in pbar:
+            if "t5" in model_id:
+                batch = {k: v.to(device) for k, v in batch.items()}
+                logits = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["logits"]
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), batch["target_ids"].view(-1))
+                pbar.set_postfix({"loss": loss.item()})
+            else:
+                x, y = batch
+                x, y = x.to(device), y.to(device)
+                logits = model(x)
+                loss = F.cross_entropy(logits, y)
+                pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
+                loss = loss.item() * x.size(0)
+                acc = (logits.argmax(1) == y).sum().item()
+                total_loss += loss
+                total_acc += acc
+            
+            if log and "t5" not in model_id:
                 wandb.log({
                     "eval/loss": loss,
                     "eval/acc": acc
+                })
+            elif log and "t5" in model_id:
+                wandb.log({
+                    "eval/loss": loss
                 })
         pbar.close()
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)

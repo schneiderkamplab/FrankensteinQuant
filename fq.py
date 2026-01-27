@@ -6,6 +6,7 @@ from ConvFQ import ConvFQ
 def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kwargs={}, match_name="", prefix=""):
     for name, module in model.named_children():
         qual_name = f"{prefix}.{name}" 
+        print("qual_name module:", qual_name)
 
         if isinstance(module, old_class) and re.search(match_name, qual_name) is not None:
             kwargs = dict(new_class_kwargs)
@@ -40,5 +41,5 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
             replace_modules(module, old_class, new_class, new_class_kwargs, match_name, prefix=qual_name)
 
 def frankensteinize(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kwargs={}):
-    replace_modules(model, old_class=old_class, new_class=new_class, new_class_kwargs=new_class_kwargs, match_name="conv|fc|cnn|linear|attention|classifier|ViTOutput|intermediate", prefix="")
+    replace_modules(model, old_class=old_class, new_class=new_class, new_class_kwargs=new_class_kwargs, match_name="conv|fc|cnn|linear|attention|classifier|ViTOutput|intermediate|.decoder.block|.encoder.block", prefix="")
     return model

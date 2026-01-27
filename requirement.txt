@@ -1,0 +1,8 @@
+torch 
+typer
+torchvision 
+datasets
+transformers
+wandb
+torchao
+sentencepiece
