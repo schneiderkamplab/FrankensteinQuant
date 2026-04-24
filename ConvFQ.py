@@ -20,10 +20,28 @@ class ConvFQ(nn.Conv2d, CostMixin):
         )
         self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
         self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
+        # External trainer updates this each step; used when forward is called without tau.
+        self.tau = 1.0
+        self.use_gumbel = True
+        self.hard_select = False
 
-    def forward(self, x, tau=1.0, collect_costs=True):
-        x_quant, c1, _, scale1 = self.a_q(x, tau, return_cost=collect_costs) # activation 
-        w_quant, c2, _, scale2 = self.w_q(self.weight, tau, return_cost=collect_costs) # weights
+    def forward(self, x, tau=None, collect_costs=True):
+        if tau is None:
+            tau = self.tau
+        x_quant, c1, _, scale1 = self.a_q(
+            x,
+            tau,
+            return_cost=collect_costs,
+            use_gumbel=self.use_gumbel,
+            hard_select=self.hard_select,
+        ) # activation 
+        w_quant, c2, _, scale2 = self.w_q(
+            self.weight,
+            tau,
+            return_cost=collect_costs,
+            use_gumbel=self.use_gumbel,
+            hard_select=self.hard_select,
+        ) # weights
         out = F.conv2d(x_quant, w_quant, self.bias, stride=self.stride, padding=self.padding)
         self.costs = {"act": c1["expected_cost"], "w": c2["expected_cost"]}
 

@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from CostMixin import CostMixin
@@ -18,17 +17,33 @@ class LinearFQ(nn.Linear, CostMixin):
         super().__init__(
             in_features, out_features, bias=bias, device=device, dtype=dtype
         )
-        # self.COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost        
-        # self.bit_choices = [16] #[2, 4, 8, 16]
         self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
         self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
+        # External trainer updates this each step; used when forward is called without tau.
+        self.tau = 1.0
+        self.use_gumbel = True
+        self.hard_select = False
 
     def __repr__(self):
         return f"LinearFQ(in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None})"
 
-    def forward(self, x, tau=1.0, collect_costs=True, rescale=True):
-        x_quant, c1, _, scale1 = self.a_q(x, tau, return_cost=collect_costs)
-        w_quant, c2, _, scale2 = self.w_q(self.weight, tau, return_cost=collect_costs)
+    def forward(self, x, tau=None, collect_costs=True, rescale=True):
+        if tau is None:
+            tau = self.tau
+        x_quant, c1, _, scale1 = self.a_q(
+            x,
+            tau,
+            return_cost=collect_costs,
+            use_gumbel=self.use_gumbel,
+            hard_select=self.hard_select,
+        )
+        w_quant, c2, _, scale2 = self.w_q(
+            self.weight,
+            tau,
+            return_cost=collect_costs,
+            use_gumbel=self.use_gumbel,
+            hard_select=self.hard_select,
+        )
         out = F.linear(x_quant, w_quant, self.bias)
         
         # No need to rescale here - quantization already handles it

@@ -2,30 +2,51 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
-from LinearFQ import LinearFQ
 
-def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_id):
+
+def _set_quant_runtime(model, tau, use_gumbel, hard_select=False):
+    for module in model.modules():
+        if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "tau"):
+            module.tau = tau
+        if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "use_gumbel"):
+            module.use_gumbel = use_gumbel
+        if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "hard_select"):
+            module.hard_select = hard_select
+
+def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_id="None", cost_reduction="sum", use_gumbel=True):
     model.train()
     total_loss, total_acc = 0, 0
 
     pbar = tqdm(loader, desc="Training")
     for batch in pbar: 
-        if "t5" in model_id:
+        if model_id is not None and "t5" in model_id:
             batch = {k: v.to(device) for k, v in batch.items()}
             task_loss = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["loss"]
         else:
             x, y = batch
             x, y = x.to(device), y.to(device)
+            # Most parent models call quantized layers without explicit tau; set it on wrappers.
+            _set_quant_runtime(model, tau=tau, use_gumbel=use_gumbel, hard_select=False)
             logits = model(x) 
             task_loss = F.cross_entropy(logits, y)
         cost = 0.0
+        cost_modules = 0
     
         for module in model.modules():
             if hasattr(module, 'get_cost'):
                 cost += module.get_cost()
-        loss = task_loss + lambda_cost * cost
+                cost_modules += 1
+
+        if cost_reduction == "mean":
+            cost_term = cost / max(cost_modules, 1)
+        elif cost_reduction == "sum":
+            cost_term = cost
+        else:
+            raise ValueError(f"Unknown cost_reduction: {cost_reduction}. Use 'sum' or 'mean'.")
+
+        loss = task_loss + lambda_cost * cost_term
         
-        if "t5" in model_id:
+        if model_id is not None and "t5" in model_id:
             pbar.set_postfix({"loss": loss.item()})
         else:
             pbar.set_postfix({"loss": loss.item(), "acc": (logits.argmax(1) == y).float().mean().item()})
@@ -34,7 +55,11 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
             wandb.log({
                 "train/task_loss": task_loss.item(),
                 "train/total_loss": loss.item(),
-                "train/cost": cost, "train/tau": tau
+                "train/cost_raw": cost.item() if torch.is_tensor(cost) else float(cost),
+                "train/cost_term": cost_term.item() if torch.is_tensor(cost_term) else float(cost_term),
+                "train/cost_modules": cost_modules,
+                "train/tau": tau if tau is not None else -1.0,
+                "train/use_gumbel": 1 if use_gumbel else 0,
                 })
         loss.backward()
         # with torch.no_grad():
@@ -45,19 +70,28 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
         #                 print(f"{name} grad norm: {module.weight.grad.norm():.6f}")
         optimizer.step()
         optimizer.zero_grad()
+
+        if model_id is None or "t5" not in model_id:
+            batch_size = x.size(0)
+            total_loss += task_loss.item() * batch_size
+            total_acc += (logits.argmax(1) == y).sum().item()
     
     pbar.close()
+    if model_id is not None and "t5" in model_id:
+        return 0.0, 0.0
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
 
-def evaluate(model, loader, device, log, model_id):
+def evaluate(model, loader, device, log, model_id="None"):
     model.eval()
+    # Always disable Gumbel sampling for deterministic, apples-to-apples validation.
+    _set_quant_runtime(model, tau=1.0, use_gumbel=False, hard_select=True)
     total_loss, total_acc = 0, 0
 
     with torch.no_grad():
         pbar = tqdm(loader, desc="Evaluating")
 
         for batch in pbar:
-            if "t5" in model_id:
+            if model_id is not None and "t5" in model_id:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 logits = model(input_ids=batch["source_ids"],attention_mask=batch["source_mask"],labels=batch["target_ids"] )["logits"]
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), batch["target_ids"].view(-1))
@@ -73,12 +107,12 @@ def evaluate(model, loader, device, log, model_id):
                 total_loss += loss
                 total_acc += acc
             
-            if log and "t5" not in model_id:
+            if log and model_id is not None and "t5" not in model_id:
                 wandb.log({
                     "eval/loss": loss,
                     "eval/acc": acc
                 })
-            elif log and "t5" in model_id:
+            elif log and model_id is not None and "t5" in model_id:
                 wandb.log({
                     "eval/loss": loss
                 })

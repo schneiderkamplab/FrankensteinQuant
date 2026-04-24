@@ -1,8 +1,10 @@
 import ssl
 import typer
+import json
+import random
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
@@ -17,12 +19,13 @@ from models.SmallNet import SmallNet
 from models.vit import ViTWrapper
 from fq import frankensteinize
 from gumbel_bit_quantizer import GumbelBitQuantizer
+from computer_analyser import ComputeAnalyser
 
 ssl._create_default_https_context = ssl._create_unverified_context
 app = typer.Typer()
 
 BIT_CHOICES = [2, 4, 8, 16]
-COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}  # example proxy cost
+COST_TABLE = {2: 0.5, 4: 1.0, 8: 2.0, 16: 3.0}
 
 class OpusBooks(Dataset):
     
@@ -35,9 +38,8 @@ class OpusBooks(Dataset):
     def __getitem__(self, index):
         source = self.dataset[index]['translation']['en']
         target = self.dataset[index]['translation']['fr']
-        source = self.tokenizer.batch_encode_plus([source], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
-        targets = self.tokenizer.batch_encode_plus([target], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
-        
+        source = self.tokenizer([source], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
+        targets = self.tokenizer([target], max_length=512, padding='max_length', truncation=True, return_tensors="pt")
 
         return {"source_ids": source['input_ids'].squeeze(), "source_mask": source['attention_mask'].squeeze(), "target_ids": targets['input_ids'].squeeze(), "target_mask": targets['attention_mask'].squeeze()}
 
@@ -48,21 +50,69 @@ def main(
     weight_decay: float = 0.0,
     batch_size: int = 128,
     lambda_cost: float = 0.001,
-    tau_start: float = 5.0,
-    tau_end: float = 0.5,
+    alpha_lr_mult: float = 20.0,
+    cost_reduction: str = "sum",
+    use_gumbel: bool = True,
+    tau_start: float = 2.0,
+    tau_end: float = 0.3,
+    tau_decay_power: float = 2.0,
     use_quant: bool = False,
     bit_choices: str = None,
     log: bool = False,
     model_type: str = "vit",
     debug: bool = False, # reduce number of sampels for debugging
+    true_costs: bool = False, # use measured costs instead of proxy costs
+    include_cnn: bool = False,
+    seed: int = 42,
+    deterministic: bool = True,
+    num_workers: int = 0,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Reproducibility controls
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
+    def seed_worker(worker_id):
+        worker_seed = seed + worker_id
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
+
+    train_generator = torch.Generator()
+    train_generator.manual_seed(seed)
+    test_generator = torch.Generator()
+    test_generator.manual_seed(seed)
     
+    print(f"model type: {model_type}")
     if use_quant:
         if bit_choices is not None:     
             bit_choices = eval(bit_choices)
         else:
+            print("Using default bit choices [2,4,8,16]")
             bit_choices = BIT_CHOICES
+
+    # Determine cost table
+    if true_costs:
+        analyser = ComputeAnalyser()
+        cost_table_raw = analyser.analyse()
+        print("Using true cost table:", cost_table_raw)
+        with open("compute_benchmark_results.json", "r") as f:
+            data = json.load(f)
+            cost_table_benchmark = data[0]['benchmarks']['2048x2048']
+        # balance compute and memory costs 
+        current_cost_table = {int(k): v['time_ms'] for k, v in cost_table_benchmark.items()}
+        print("Using true cost table:", current_cost_table)     
+    else:
+        current_cost_table = COST_TABLE
 
     if model_type.lower() in ["t5"]:
         model_id = 't5-small'
@@ -70,17 +120,32 @@ def main(
         train_test_split = load_dataset("Helsinki-NLP/opus_books", "en-fr", split="train").train_test_split(test_size=0.2) # Fetch from Huggingface
         trainset = OpusBooks(tokenizer, debug, train_test_split['train'], num_debug_samples=15000)
         testset = OpusBooks(tokenizer, debug, train_test_split['test'], num_debug_samples=3000)
-    else:            
+    else:       
+        model_id = None     
         transform = T.Compose([T.ToTensor(), T.Normalize((0.5,), (0.5,))])
         trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform)
         testset = torchvision.datasets.CIFAR100(root="./data", train=False, download=True, transform=transform)
     
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=1)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1)
+    trainloader = DataLoader(
+        trainset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        worker_init_fn=seed_worker,
+        generator=train_generator,
+    )
+    testloader = DataLoader(
+        testset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        worker_init_fn=seed_worker,
+        generator=test_generator,
+    )
 
     if log:
         run_name = f"{model_type.upper()}_CIFAR100" + (f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec")
-        wandb.init(project="frankenstein-quant", name=run_name)
+        wandb.init(project="scaling-frankenstein-quant", name=run_name+f"_l_{str(lambda_cost)}", tags=f"vit_lambda_{lambda_cost}" if model_type.lower() == "vit" else "t5" if model_type.lower() == "t5" else "smallnet")
     
     match model_type.lower():
         case "vit":
@@ -98,18 +163,20 @@ def main(
     if use_quant:
         typer.echo("Applying Frankenstein Quantization...")
         model = frankensteinize(model, new_class_kwargs={
-            # "name": "fc",
-            "name": "T5Attention",
+            "name": "fc",
+            # "name": "T5Attention",
             "bit_choices": bit_choices,
-            "cost_table": COST_TABLE
+            "cost_table": current_cost_table
         })
-        # model = frankensteinize(model, old_class=nn.Conv2d, new_class=ConvFQ, new_class_kwargs={
-        #     "name": "conv2d",
-        #     "bit_choices": bit_choices,
-        #     "cost_table": COST_TABLE
-        # })
+        if include_cnn:
+            typer.echo("Also applying Frankenstein Quantization to Conv2d layers...")
+            model = frankensteinize(model, old_class=nn.Conv2d, new_class=ConvFQ, new_class_kwargs={
+                "name": "conv2d",
+                "bit_choices": bit_choices,
+                "cost_table": current_cost_table
+            })
 
-    print("Model Summary:")
+    print("\n=== Model Summary ===")
     print(model)
     model.to(device)
 
@@ -118,28 +185,84 @@ def main(
             "epochs": 10,
             "lr": 1e-3,
             "weight_decay": 0.0,
+            "seed": seed,
+            "deterministic": deterministic,
             "bit_choices": bit_choices,
-            "cost_table": COST_TABLE,
+            "cost_table": current_cost_table,
             "use_quant": use_quant,
+            "use_gumbel": use_gumbel,
+            "cost_reduction": cost_reduction,
             "model": str(model)
         })
-    # Note always to layer replacements BEFORE optimizer creation 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    if use_quant:
+        alpha_params = []
+        other_params = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.endswith(".alpha"): # learnable logits in GumbelBitQuantizer should have separate LR
+                alpha_params.append(param)
+            else:
+                other_params.append(param)
+        
+        print("\n=== Optimizer Parameter Groups ===")
+        print(alpha_params)
 
-    epochs = epochs + 1 # offset by one for tau calculation
-    for epoch in range(1, epochs):
-        tau = tau_start * (tau_end / tau_start) ** (epoch / (epochs - 1))
-        loss, acc = train_epoch(model, trainloader, optimizer, device, tau, lambda_cost, log, model_id)
+        if alpha_params:
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": other_params, "lr": lr, "weight_decay": weight_decay},
+                    {"params": alpha_params, "lr": lr * alpha_lr_mult, "weight_decay": 0.0},
+                ]
+            )
+            print(
+                f"Using separate alpha LR: base_lr={lr}, alpha_lr={lr * alpha_lr_mult}, "
+                f"alpha_params={len(alpha_params)}"
+            )
+        else:
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+            print("No alpha parameters found; using single optimizer group.")
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+
+    for epoch in range(1, epochs + 1):
+        if use_gumbel:
+            progress = (epoch - 1) / max(epochs - 1, 1)
+            tau = tau_end + (tau_start - tau_end) * ((1.0 - progress) ** tau_decay_power)
+        else:
+            tau = None
+        loss, acc = train_epoch(
+            model,
+            trainloader,
+            optimizer,
+            device,
+            tau,
+            lambda_cost,
+            log,
+            model_id,
+            cost_reduction=cost_reduction,
+            use_gumbel=use_gumbel,
+        )
         test_loss, test_acc = evaluate(model, testloader, device, log, model_id)
         if log:
-            wandb.log({
+            log_dict = {
                 "train/loss": loss,
                 "train/acc": acc,
                 "test/loss": test_loss,
                 "test/acc": test_acc,
-                "train/tau": tau
-            })
-        print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}, tau={tau:.2f}")
+                "train/tau": tau if tau is not None else -1.0,
+                "train/use_gumbel": 1 if use_gumbel else 0,
+            }
+            if use_quant:
+                 for name, module in model.named_modules():
+                    if isinstance(module, GumbelBitQuantizer):
+                        idx = module.alpha.argmax().item()
+                        current_bit = module.bit_choices[idx]
+                        log_dict[f"bits/{name}"] = current_bit
+            wandb.log(log_dict)
+        tau_str = f"{tau:.2f}" if tau is not None else "off"
+        print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}, tau={tau_str}")
 
     if use_quant:
         # iterate through all modules write chosen bit from GumbelBitQuantizer to each layer
