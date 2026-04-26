@@ -5,10 +5,9 @@ import pandas as pd
 import numpy as np
 import argparse
 import os
+import yaml
 
-def comparison(entity, project, plot_keys=["test/loss", "test/acc"], run_names=["VIT_CIFAR100_FullPrec", "VIT_CIFAR100_Quant_[2, 4, 8, 16]"], run_id=None, output_dir="plot_comparisons"):
-    # if not run_id:
-    #     raise ValueError("At least one run ID must be provided for loss plotting.")
+def comparison(entity, project, plot_name, plot_config, plot_key=[], run_names=[], labels={}, run_id=None, name=None, output_dir="plot_comparisons"):
     api = wandb.Api()
         
     if run_id:
@@ -18,30 +17,23 @@ def comparison(entity, project, plot_keys=["test/loss", "test/acc"], run_names=[
         
     if run_names:
         runs = [run for run in runs if run.name in run_names]
-    
+
     data = {}
-    # get loss history for each run 
     for run in runs:
-        for plot_key in plot_keys:
-            if plot_key not in run.history().columns:
-                print(f"Warning: {plot_key} not found in history for run {run.name}. Available keys: {run.history().columns}")
+        for key in plot_key :
+            if key not in run.history().columns:
+                print(f"Warning: {key} not found in history for run {run.name}. Available keys: {run.history().columns}")
                 continue
-            print("Fetching history for run:", run.name)
-            history = run.history(samples=10000) 
-            
+            history = run.history(samples=10000)             
             if history.empty:
                 print(f"No history found for run {run.name}")
                 continue
-
-            print("History ", history)
-            train_metric = history[plot_key]
-            print(f"{plot_key}:", train_metric)
+            train_metric = history[key]
+            print(f"{key}:", train_metric)
             cols = history.columns
             print("Available columns:", cols)
-            test_loss_cols = [c for c in cols if plot_key in c]
+            test_loss_cols = [c for c in cols if key in c]
             data[run.name] = test_loss_cols
-            # loss_cols = [c for c in cols if "loss" in c]
-            # print(f"Run: {run.name} ({run.id}) - State: {run.state}, ")
 
         os.makedirs(output_dir, exist_ok=True)
         plt.figure(figsize=(10, 6))
@@ -49,193 +41,122 @@ def comparison(entity, project, plot_keys=["test/loss", "test/acc"], run_names=[
             run = next(r for r in runs if r.name == run_name)
             history = run.history(samples=10000) 
             cols = history.columns
-            test_loss_cols = [c for c in cols if plot_key in c]
+            test_loss_cols = [c for c in cols if key in c]
             for c in test_loss_cols:
-                sns.lineplot(data=history, x='_step', y=c, label=f"{run.name} - {c}")
-        plt.title(f"{plot_key} over Epochs - Comparison")
-        plt.xlabel("Step")
-        plt.ylabel(plot_key)
+                display_label = labels.get(run.name, run.name)    
+                sns.lineplot(data=history, x='_step', y=c, label=display_label)
+        plt.title(plot_config['title'])
+        plt.xlabel(plot_config['x_label'])
+        plt.ylabel(plot_config['y_label'])
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f"{output_dir}/comparison_{plot_key.replace('/', '_')}.png")
+        plt.savefig(f"{output_dir}/{plot_name}.png")
+        plt.close()
 
 def visualize(entity, project, run_id=None, output_dir="plots"):
     api = wandb.Api()
-    
+
     if run_id:
         runs = [api.run(f"{entity}/{project}/{run_id}")]
     else:
-        # Get all runs from the project
         runs = api.runs(f"{entity}/{project}")
-    
-    for run in runs:
-        print(f"Run: {run.name} ({run.id}) - State: {run.state}")
-    exit()
 
     os.makedirs(output_dir, exist_ok=True)
-    
+
     for run in runs:
         print(f"Processing run: {run.name} ({run.id})")
-        
-        # 1. Fetch history
-        # Using a large samples value to get all steps
-        history = run.history(samples=10000) 
-        
+
+        history = run.history(samples=10000)
         if history.empty:
             print(f"No history found for run {run.name}")
             continue
 
-        # Filter relevant columns
         cols = history.columns
-        loss_cols = [c for c in cols if "loss" in c]
         bit_cols = [c for c in cols if "bits/" in c]
-        
-        # 2. Plot Loss
-        plt.figure(figsize=(10, 6))
-        for c in loss_cols:
-            sns.lineplot(data=history, x='_step', y=c, label=c)
-        plt.title(f"Loss over Epochs - {run.name}")
-        plt.xlabel("Step")
-        plt.ylabel("Loss")
-        plt.grid(True)
-        plt.savefig(f"{output_dir}/{run.name}_loss.png")
-        plt.close()
-        
-        # 3. Plot Bit Widths
         if not bit_cols:
             print(f"No bit width data found for {run.name}")
             continue
-            
-        # Structure data for heatmap
-        # bits/layer_name -> value
-        # We want: Index=Layer, Columns=Epoch/Step
-        
-        # Clean layer names: bits/layer.w_q -> layer.w_q
-        
-        # Extract bit data
+
         bit_data = history[["_step"] + bit_cols].copy()
-        
-        # Melt to long format: Step, Layer, Bits
         bit_data_melted = bit_data.melt(id_vars=["_step"], var_name="Layer", value_name="Bits")
         bit_data_melted["Layer"] = bit_data_melted["Layer"].apply(lambda x: x.replace("bits/", ""))
-        
-        # Separate into Weights and Activations if possible
-        # Assumes naming convention ending in .w_q or .a_q based on LinearFQ/ConvFQ
+
         w_data = bit_data_melted[bit_data_melted["Layer"].str.contains(r"\.w_q|weights?|_w")]
         a_data = bit_data_melted[bit_data_melted["Layer"].str.contains(r"\.a_q|activations?|_a")]
-        
-        # Helper to plot heatmap
-        def plot_heatmap(data, title_suffix, filename_suffix):
-            if data.empty:
-                return
 
-            heatmap_data = data.dropna().pivot(index="Layer", columns="_step", values="Bits")
-            if heatmap_data.empty:
-                return
-
-            # Reduce heatmap size if too large
-            if heatmap_data.shape[1] > 20: # User wanted "smaller", downsample more aggressively
-                indices = np.linspace(0, heatmap_data.shape[1]-1, 20, dtype=int)
-                heatmap_data = heatmap_data.iloc[:, indices]
-
-            plt.figure(figsize=(10, 6)) # Smaller figure size
-            sns.heatmap(heatmap_data, cmap="viridis", annot=True, fmt=".0f", cbar_kws={'label': 'Bits'})
-            plt.title(f"Bit Width Evolution ({title_suffix}) - {run.name}")
-            plt.xlabel("Step")
-            plt.ylabel("Layer Module")
-            plt.tight_layout()
-            plt.savefig(f"{output_dir}/{run.name}_bits_heatmap_{filename_suffix}.png")
-            plt.close()
-
-        # If strict naming (.w_q, .a_q) is found, split plots. Otherwise plot all.
-        if not w_data.empty and not a_data.empty:
-            plot_heatmap(w_data, "Weights", "weights")
-            plot_heatmap(a_data, "Activations", "activations")
-        else:
-            # Fallback to plotting everything in one if regex didn't match cleanly
-            plot_heatmap(bit_data_melted, "All", "all")
-
-        # 4. Generate Bar Plots for Average Final Bit-Width per Layer
-        # "visulaize the average bit over each layer instead og steps"
-        
-        def plot_avg_bits_per_layer(data, title_suffix, filename_suffix):
+        def plot_final_bits_per_layer(data, title_suffix, filename_suffix):
             if data.empty:
                 return
             
-            # Use last ~20% of steps or last 10 steps to determine "converged" average
-            # If run is short, use all.
-            steps = data["_step"].unique()
-            if len(steps) > 5:
-                cutoff = steps[int(len(steps) * 0.8)]
-                recent_data = data[data["_step"] >= cutoff]
-            else:
-                recent_data = data
+            # Use the final bit-width value (from the last logged step)
+            # Sort by step and take the last entry for each layer
+            layer_values = data.sort_values("_step").groupby("Layer")[["Bits"]].last().reset_index()
             
-            # Calculate mean per layer
-            layer_means = recent_data.groupby("Layer")["Bits"].mean().reset_index()
-            
+            # Clean up x-axis labels to keep only unique identifiers
             def clean_name(name):
-                print("name: ", name)
                 n = name
-                n = n.replace("encoder.block.", "enc.")
-                n = n.replace("decoder.block.", "dec.")
-                n = n.replace("model.", "")
-                n = n.replace("backbone.", "")
-                n = n.replace("features.", "")
+                # Remove common root prefixes
+                for prefix in ["model.", "backbone.", "features.", "encoder.", "decoder.", "vit."]:
+                     if n.startswith(prefix):
+                         n = n[len(prefix):]
+                
+                # Remove quantization suffixes (since title/filename indicates weights/activations)
+                for suffix in [".w_q", "_w", ".a_q", "_a"]:
+                    if n.endswith(suffix):
+                        n = n[:-len(suffix)]
+
+                # Shorten structural names
+                n = n.replace("block.", "b")
+                n = n.replace("layer.", "l")
                 n = n.replace("SelfAttention", "SA")
                 n = n.replace("DenseReluDense", "FFN")
-                n = n.replace("vit.vit.encoder.", "encoder.")
-                n = n.replace("attention.", "")
-                # n = n.replace(".layer.", ".l.") # Keep somewhat verbose to avoid confusion if needed
+                n = n.replace("CrossAttention", "CA")
+                n = n.replace("encoder", "enc")
+                n = n.replace("attention", "attn")
+                n = n.replace("vit", "")
+                
+                # Clean up repeated dots or leading/trailing dots
+                n = n.strip(".")
                 return n
 
-            layer_means["CleanLayer"] = layer_means["Layer"].apply(clean_name)
-            layer_means = layer_means.sort_values("Layer") # Sort by original full name to keep logical order
+            layer_values["CleanLayer"] = layer_values["Layer"].apply(clean_name)
+            layer_values = layer_values.sort_values("Layer") 
             
-            plt.figure(figsize=(max(8, len(layer_means)*0.4), 7)) # Dynamic width
+            plt.figure(figsize=(max(8, len(layer_values)*0.4), 7))
             
-            # 2) Color bars by bit depth
-            # Create a colormap
-            norm = plt.Normalize(2, 16) # Assuming typical bit range 2-16
+            # Color bars by bit depth
+            norm = plt.Normalize(2, 16)
             sm = plt.cm.ScalarMappable(cmap="viridis", norm=norm)
             sm.set_array([])
-            
-            # Create palette dict based on the values
-            palette = {l: sm.to_rgba(b) for l, b in zip(layer_means["CleanLayer"], layer_means["Bits"])}
+            palette = {l: sm.to_rgba(b) for l, b in zip(layer_values["CleanLayer"], layer_values["Bits"])}
 
-            # hue=CleanLayer is required to apply palette properly map-wise in recent seaborn
-            sns.barplot(data=layer_means, x="CleanLayer", y="Bits", palette=palette, hue="CleanLayer", legend=False)
+            sns.barplot(data=layer_values, x="CleanLayer", y="Bits", palette=palette, hue="CleanLayer", legend=False)
             
-            plt.title(f"Average Final Bit-Width per Layer ({title_suffix})")
+            plt.title(f"Final Bit-Width ({title_suffix}) - {run.name}")
             plt.xlabel("Layer")
-            plt.ylabel("Avg Bits")
+            plt.ylabel("Bits")
             plt.xticks(rotation=45, ha='right')
             plt.grid(axis='y', linestyle='--', alpha=0.7)
-            plt.ylim(0, 17) # Ensure room for labels
+            plt.ylim(0, 17)
             
-            # Add colorbar to show scale
             cbar = plt.colorbar(sm, ax=plt.gca(), fraction=0.046, pad=0.04)
             cbar.set_label('Bits')
 
-            # Add value labels
-            for i, v in enumerate(layer_means["Bits"]):
+            for i, v in enumerate(layer_values["Bits"]):
                 plt.text(i, v + 0.2, f"{v:.1f}", ha='center', va='bottom', fontsize=9, rotation=90)
                 
             plt.tight_layout()
-            plt.savefig(f"{output_dir}/{run.name}_avg_bits_bar_{filename_suffix}.png")
+            plt.savefig(f"{output_dir}/{run.name}_final_bits_bar_{filename_suffix}.png")
             plt.close()
 
         if not w_data.empty and not a_data.empty:
-            plot_avg_bits_per_layer(w_data, "Weights", "weights")
-            plot_avg_bits_per_layer(a_data, "Activations", "activations")
+            plot_final_bits_per_layer(w_data, "Weights", "weights")
+            plot_final_bits_per_layer(a_data, "Activations", "activations")
         else:
-            plot_avg_bits_per_layer(bit_data_melted, "All", "all")
+            plot_final_bits_per_layer(bit_data_melted, "All", "all")
 
-        print(f"Saved plots for {run.name}")
-        
-        # 4. Generate LaTeX Table for Average Final Bit-Widths
-        generate_latex_table(run.name, bit_data, output_dir)
+        print(f"Saved bar plots for {run.name}")
 
 def generate_latex_table(run_name, bit_data, output_dir):
     # bit_data has columns: _step, [bits/layer1, bits/layer2...]
@@ -289,8 +210,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--entity", type=str, default="user_entity_here", help="WandB entity/username")
     parser.add_argument("--project", type=str, default="frankenstein-quant", help="WandB project name")
-    parser.add_argument("--run-id", type=str, help="Specific run ID to visualize")
-    parser.add_argument("--compare", type=list, default=[], help="Generate comparison plots between runs")
+    parser.add_argument("--plot-file", type=str, default="plot_configs.yaml", help="YAML file specifying which plots to generate")
     args = parser.parse_args()
 
     # # Try to guess entity if not provided? user needs to provide it or configure wandb
@@ -300,10 +220,20 @@ if __name__ == "__main__":
              args.entity = wandb.Api().default_entity
          except:
              pass
-    visualize(args.entity, args.project, args.run_id)
-    if not args.run_id:
-        print("\nGenerating Comparison Plots...")
-        visualize_comparison(args.entity, args.project)
-    if args.compare:
-        print("\nGenerating Specified Comparison Plots...")
-        comparison(args.entity, args.project, run_id=args.run_id)  
+
+    with open(args.plot_file, "r") as f:
+        configs = yaml.safe_load(f)
+        # print("Loaded plot configurations:", configs)
+
+    for name, config in configs.items():
+        print(config)
+        if len(config['runs']) > 1:
+            print("\nGenerating Specified Comparison Plots...")
+            os.makedirs(config.get("output_dir", "plot_comparisons"), exist_ok=True)
+            comparison(args.entity, args.project, plot_name=name, plot_config=config['plot_config'], run_names=config["runs"], labels=config.get("labels", {}), plot_key=config["plot_key"], run_id=config.get("run_id", None), output_dir=config.get("output_dir", "plot_comparisons"))
+        else:
+            print("\nGenerating Plots for Individual Runs...")
+            visualize(args.entity, args.project)
+        # if not args.run_id:
+        #     print("\nGenerating Comparison Plots...")
+        # visualize_comparison(args.entity, args.project)

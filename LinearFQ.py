@@ -19,29 +19,20 @@ class LinearFQ(nn.Linear, CostMixin):
         )
         self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
         self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
-        # External trainer updates this each step; used when forward is called without tau.
-        self.tau = 1.0
-        self.use_gumbel = True
         self.hard_select = False
 
     def __repr__(self):
         return f"LinearFQ(in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None})"
 
-    def forward(self, x, tau=None, collect_costs=True, rescale=True):
-        if tau is None:
-            tau = self.tau
+    def forward(self, x, collect_costs=True, rescale=True):
         x_quant, c1, _, scale1 = self.a_q(
             x,
-            tau,
             return_cost=collect_costs,
-            use_gumbel=self.use_gumbel,
             hard_select=self.hard_select,
         )
         w_quant, c2, _, scale2 = self.w_q(
             self.weight,
-            tau,
             return_cost=collect_costs,
-            use_gumbel=self.use_gumbel,
             hard_select=self.hard_select,
         )
         out = F.linear(x_quant, w_quant, self.bias)

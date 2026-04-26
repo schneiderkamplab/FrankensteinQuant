@@ -4,18 +4,17 @@ from tqdm import tqdm
 import wandb
 
 
-def _set_quant_runtime(model, tau, use_gumbel, hard_select=False):
+def _set_quant_runtime(model, hard_select=False):
     for module in model.modules():
-        if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "tau"):
-            module.tau = tau
-        if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "use_gumbel"):
-            module.use_gumbel = use_gumbel
         if hasattr(module, "w_q") and hasattr(module, "a_q") and hasattr(module, "hard_select"):
             module.hard_select = hard_select
 
-def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_id="None", cost_reduction="sum", use_gumbel=True):
+def train_epoch(model, loader, optimizer, device, lambda_cost, log, model_id="None", cost_reduction="sum"):
     model.train()
     total_loss, total_acc = 0, 0
+
+    # Configure all quantized layers once before the batch loop.
+    _set_quant_runtime(model, hard_select=False)
 
     pbar = tqdm(loader, desc="Training")
     for batch in pbar: 
@@ -25,8 +24,6 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
         else:
             x, y = batch
             x, y = x.to(device), y.to(device)
-            # Most parent models call quantized layers without explicit tau; set it on wrappers.
-            _set_quant_runtime(model, tau=tau, use_gumbel=use_gumbel, hard_select=False)
             logits = model(x) 
             task_loss = F.cross_entropy(logits, y)
         cost = 0.0
@@ -58,8 +55,6 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
                 "train/cost_raw": cost.item() if torch.is_tensor(cost) else float(cost),
                 "train/cost_term": cost_term.item() if torch.is_tensor(cost_term) else float(cost_term),
                 "train/cost_modules": cost_modules,
-                "train/tau": tau if tau is not None else -1.0,
-                "train/use_gumbel": 1 if use_gumbel else 0,
                 })
         loss.backward()
         # with torch.no_grad():
@@ -84,7 +79,7 @@ def train_epoch(model, loader, optimizer, device, tau, lambda_cost, log, model_i
 def evaluate(model, loader, device, log, model_id="None"):
     model.eval()
     # Always disable Gumbel sampling for deterministic, apples-to-apples validation.
-    _set_quant_runtime(model, tau=1.0, use_gumbel=False, hard_select=True)
+    _set_quant_runtime(model, hard_select=True)
     total_loss, total_acc = 0, 0
 
     with torch.no_grad():

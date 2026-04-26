@@ -31,20 +31,8 @@ class GumbelBitQuantizer(nn.Module):
         xq = (xq_rounded - xq).detach() + xq  # STE: forward=round, backward=identity
         return xq * scale, scale
 
-    def gumbel_softmax(self, logits, tau=1.0, hard=False, eps=1e-20):
-        g = -torch.log(-torch.log(torch.rand_like(logits) + eps) + eps)
-        y = F.softmax((logits + g) / tau, dim=-1)
-        if hard:
-            y_hard = F.one_hot(y.argmax(dim=-1), num_classes=logits.size(-1)).float()
-            y = (y_hard - y).detach() + y
-        return y
-    
-    def forward(self, x, tau=1.0, return_cost=False, verbose=False, use_gumbel=True, hard_select=False):
-        if use_gumbel:
-            probs = self.gumbel_softmax(self.alpha, tau=tau, hard=False)
-        else:
-            # Tau-free path: deterministic softmax over logits for stable cost-driven updates.
-            probs = F.softmax(self.alpha, dim=-1)
+    def forward(self, x, return_cost=False, verbose=False, hard_select=False):
+        probs = F.softmax(self.alpha, dim=-1)
 
         if hard_select:
             # Discrete deployment-style selection: evaluate with a single chosen bit-depth.

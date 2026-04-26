@@ -52,10 +52,6 @@ def main(
     lambda_cost: float = 0.001,
     alpha_lr_mult: float = 20.0,
     cost_reduction: str = "sum",
-    use_gumbel: bool = True,
-    tau_start: float = 2.0,
-    tau_end: float = 0.3,
-    tau_decay_power: float = 2.0,
     use_quant: bool = False,
     bit_choices: str = None,
     log: bool = False,
@@ -145,7 +141,7 @@ def main(
 
     if log:
         run_name = f"{model_type.upper()}_CIFAR100" + (f"_Quant_{str(bit_choices)}" if use_quant else "_FullPrec")
-        wandb.init(project="scaling-frankenstein-quant", name=run_name+f"_l_{str(lambda_cost)}", tags=f"vit_lambda_{lambda_cost}" if model_type.lower() == "vit" else "t5" if model_type.lower() == "t5" else "smallnet")
+        wandb.init(project="scaling-frankenstein-quant-t5", name=run_name+f"_l_{str(lambda_cost)}", tags=f"vit_lambda_{lambda_cost}" if model_type.lower() == "vit" else f"t5_lambda_{lambda_cost}" if model_type.lower() == "t5" else "smallnet")
     
     match model_type.lower():
         case "vit":
@@ -190,7 +186,6 @@ def main(
             "bit_choices": bit_choices,
             "cost_table": current_cost_table,
             "use_quant": use_quant,
-            "use_gumbel": use_gumbel,
             "cost_reduction": cost_reduction,
             "model": str(model)
         })
@@ -227,22 +222,15 @@ def main(
 
 
     for epoch in range(1, epochs + 1):
-        if use_gumbel:
-            progress = (epoch - 1) / max(epochs - 1, 1)
-            tau = tau_end + (tau_start - tau_end) * ((1.0 - progress) ** tau_decay_power)
-        else:
-            tau = None
         loss, acc = train_epoch(
             model,
             trainloader,
             optimizer,
             device,
-            tau,
             lambda_cost,
             log,
             model_id,
             cost_reduction=cost_reduction,
-            use_gumbel=use_gumbel,
         )
         test_loss, test_acc = evaluate(model, testloader, device, log, model_id)
         if log:
@@ -251,8 +239,6 @@ def main(
                 "train/acc": acc,
                 "test/loss": test_loss,
                 "test/acc": test_acc,
-                "train/tau": tau if tau is not None else -1.0,
-                "train/use_gumbel": 1 if use_gumbel else 0,
             }
             if use_quant:
                  for name, module in model.named_modules():
@@ -261,8 +247,7 @@ def main(
                         current_bit = module.bit_choices[idx]
                         log_dict[f"bits/{name}"] = current_bit
             wandb.log(log_dict)
-        tau_str = f"{tau:.2f}" if tau is not None else "off"
-        print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}, tau={tau_str}")
+        print(f"Epoch {epoch}: loss={loss:.4f}, acc={acc:.4f}, test_loss={test_loss:.4f}, test_acc={test_acc:.4f}")
 
     if use_quant:
         # iterate through all modules write chosen bit from GumbelBitQuantizer to each layer
