@@ -2,7 +2,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from CostMixin import CostMixin
-from gumbel_bit_quantizer import GumbelBitQuantizer
+from gumbel_bit_quantizer import ModuleQuantizer
 
 class ConvFQ(nn.Conv2d, CostMixin):
     def __init__(
@@ -18,8 +18,8 @@ class ConvFQ(nn.Conv2d, CostMixin):
         super().__init__(
             in_channels, out_channels, kernel_size, stride=stride, padding=padding
         )
-        self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
-        self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
+        self.w_q = ModuleQuantizer(name=f"{name}_w", **kwargs)
+        self.a_q = ModuleQuantizer(name=f"{name}_a", **kwargs)
         self.hard_select = False
 
     def forward(self, x, collect_costs=True):

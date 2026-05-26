@@ -41,5 +41,7 @@ def replace_modules(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kw
             replace_modules(module, old_class, new_class, new_class_kwargs, match_name, prefix=qual_name)
 
 def frankensteinize(model, old_class=nn.Linear, new_class=LinearFQ, new_class_kwargs={}):
-    replace_modules(model, old_class=old_class, new_class=new_class, new_class_kwargs=new_class_kwargs, match_name="conv|fc|cnn|linear|attention|classifier|T5Attention|ViTOutput|intermediate|.decoder.block|.encoder.block", prefix="")
+    # Updated regex to include OLMo3 and other decoder-only models
+    match_pattern = "conv|fc|cnn|linear|attention|classifier|T5Attention|ViTOutput|intermediate|.decoder.block|.encoder.block|olmo|feed_forward|output_projection|attention_proj|q_proj|k_proj|v_proj"
+    replace_modules(model, old_class=old_class, new_class=new_class, new_class_kwargs=new_class_kwargs, match_name=match_pattern, prefix="")
     return model

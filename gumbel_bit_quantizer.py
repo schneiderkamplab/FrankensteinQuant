@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class GumbelBitQuantizer(nn.Module):
+class ModuleQuantizer(nn.Module):
     def __init__(self, bit_choices, cost_table, name="", bias=None, device=None):
         super().__init__()
         self.K = len(bit_choices)
@@ -21,10 +21,8 @@ class GumbelBitQuantizer(nn.Module):
         qmin = -(2 ** (bit - 1))
         qmax = (2 ** (bit - 1)) - 1
         # Use mean of abs for better gradient flow instead of max
-        #scale = x.abs().mean() * 2.5 / qmax  # 2.5 factor to cover most of the range
         scale = x.abs().mean() / qmax  # 2.5 factor to cover most of the range
         scale = scale.clamp(min=1e-8)
-        # Straight-through estimator: forward uses round, backward uses identity
         xq = torch.clamp(x / scale, qmin, qmax)
         xq_rounded = xq.round()
         assert (xq_rounded >= qmin).all() and (xq_rounded <= qmax).all(), f"Quantized values out of range: {xq_rounded.min().item()} to {xq_rounded.max().item()}, expected [{qmin}, {qmax}], with bit: {bit}"
@@ -36,6 +34,7 @@ class GumbelBitQuantizer(nn.Module):
 
         if hard_select:
             # Discrete deployment-style selection: evaluate with a single chosen bit-depth.
+            # Used for evaluation and finalizing choices after training.
             if self.chosen_bit is not None and self.chosen_bit in self.bit_choices:
                 chosen_idx = self.bit_choices.index(self.chosen_bit)
             else:

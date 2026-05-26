@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from CostMixin import CostMixin
-from gumbel_bit_quantizer import GumbelBitQuantizer
+from gumbel_bit_quantizer import ModuleQuantizer
 
 class LinearFQ(nn.Linear, CostMixin):
     def __init__(
@@ -17,8 +17,8 @@ class LinearFQ(nn.Linear, CostMixin):
         super().__init__(
             in_features, out_features, bias=bias, device=device, dtype=dtype
         )
-        self.w_q = GumbelBitQuantizer(name=f"{name}_w", **kwargs)
-        self.a_q = GumbelBitQuantizer(name=f"{name}_a", **kwargs)
+        self.w_q = ModuleQuantizer(name=f"{name}_w", **kwargs)
+        self.a_q = ModuleQuantizer(name=f"{name}_a", **kwargs)
         self.hard_select = False
 
     def __repr__(self):
